@@ -183,7 +183,8 @@ int main(int argc, char *argv[]) {
     return app.exec();
 }
 ```
-当使用QML对象类型作为信号参数时，参数应该使用var作为类型，并且使用q变体类型，应该在C++中使用该值：
+当信号参数是QML对象时，参数应该使用var作为类型，并且在C++中应该使用`QVariant`类型接收该参数：  
+QML:  
 ```qml
 // MyItem.qml
 import QtQuick 2.0
@@ -200,7 +201,7 @@ Item {
     }
 }
 ```
-  
+C++:  
 ```C++
 class MyClass : public QObject
 {
