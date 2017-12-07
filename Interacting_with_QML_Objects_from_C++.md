@@ -64,3 +64,169 @@ Item {
     }
 }
 ```
+孩子可以这样定位:
+```qml
+QObject *rect = object->findChild<QObject*>("rect");
+if (rect)
+    rect->setProperty("color", "red");
+```
+注意，对象可能有多个具有相同objectName的子对象。例如，ListView创建了它的委托的多个实例，因此，如果它的委托用一个特定的objectName声明，ListView将有多个具有相同objectName的子对象。在本例中，QObject::findChildren()可用于查找具有匹配对象名称的所有子对象。  
+警告:虽然可以使用C++来访问和操纵对象树深处的QML对象，但是我们建议您不要在应用程序测试和原型设计之外采用这种方法。QML和C++集成的一个优点是能够独立于C++逻辑和数据集后端实现QML用户界面，如果C++端深入到QML组件中，直接对其进行操作，那么这种策略就会中断。例如，如果新组件缺少一个必需的objectName，那么就很难将QML视图组件替换为另一个视图。对于C++实现来说，最好尽可能少地了解QML用户接口实现和QML对象树的组合。
+  
+## 从C++访问QML对象类型的成员
+### 属性
+在QML对象中声明的任何属性都可以从C++中自动访问。给出这样的QML项目:
+```qml
+// MyItem.qml
+import QtQuick 2.0
+
+Item {
+    property int someNumber: 100
+}
+```
+可以使用qq属性或QObject::setProperty()和QObject::property():设置和读取someNumber属性的值。
+```qml
+QQmlEngine engine;
+QQmlComponent component(&engine, "MyItem.qml");
+QObject *object = component.create();
+
+qDebug() << "Property value:" << QQmlProperty::read(object, "someNumber").toInt();
+QQmlProperty::write(object, "someNumber", 5000);
+
+qDebug() << "Property value:" << object->property("someNumber").toInt();
+object->setProperty("someNumber", 100);
+```
+您应该始终使用QObject::setProperty()、qq mlproperty或QMetaProperty::write()来更改QML属性值，以确保QML引擎能够感知到属性的变化。例如，假设您有一个自定义类型的PushButton，它有一个buttonText属性，该属性在内部反映了一个m buttonText成员变量的值。像这样直接修改成员变量不是一个好主意:
+```qml
+//bad code
+QQmlComponent component(engine, "MyButton.qml");
+PushButton *button = qobject_cast<PushButton*>(component.create());
+button->m_buttonText = "Click me";
+```
+由于该值是直接更改的，因此它绕过Qt的元对象系统，而QML引擎并没有意识到属性的变化。这意味着对buttonText的属性绑定将不会被更新，任何onbuttontext更改的处理程序都不会被调用。
+### 调用QML方法
+所有QML方法暴露在元对象系统和可以从c++调用使用QMetaObject::invokeMethod()。从QML传递的方法参数和返回值总是被转换成C++中的q变量值。  
+  
+这是一个c++应用程序调用使用QMetaObject QML方法::invokeMethod():
+QML：
+```qml
+// MyItem.qml
+import QtQuick 2.0
+
+Item {
+    function myQmlFunction(msg) {
+        console.log("Got message:", msg)
+        return "some return value"
+    }
+}
+```
+C++：
+```C++
+// main.cpp
+QQmlEngine engine;
+QQmlComponent component(&engine, "MyItem.qml");
+QObject *object = component.create();
+
+QVariant returnedValue;
+QVariant msg = "Hello from C++";
+QMetaObject::invokeMethod(object, "myQmlFunction",
+        Q_RETURN_ARG(QVariant, returnedValue),
+        Q_ARG(QVariant, msg));
+
+qDebug() << "QML function returned:" << returnedValue.toString();
+delete object;
+```
+注意问返回参数()和Q参数()理由QMetaObject::invokeMethod()必须指定为QVariant类型,因为这是通用数据类型用于QML方法参数和返回值。
+  
+### 连接QML信号
+所有的QML信号都会自动地提供给C++，并且可以像普通C++信号一样，通过QObject::connect()连接。同样，任何C++信号都可以由QML对象进行信号的接收和处理。  
+  
+下面是一个QML组件，它带有一个名为qmlSignal的信号，并携带一个string类型的参数。这个信号通过QObject::connect()函数被连接到一个C++对象的槽，因此每当`qmlSignal`被发出的时候，槽`cppSlot()`都会被调用：
+```qml
+// MyItem.qml
+import QtQuick 2.0
+
+Item {
+    id: item
+    width: 100; height: 100
+
+    signal qmlSignal(string msg)
+
+    MouseArea {
+        anchors.fill: parent
+        onClicked: item.qmlSignal("Hello from QML")
+    }
+}
+```
+  
+```C++
+class MyClass : public QObject
+{
+    Q_OBJECT
+public slots:
+    void cppSlot(const QString &msg) {
+        qDebug() << "Called the C++ slot with message:" << msg;
+    }
+};
+
+int main(int argc, char *argv[]) {
+    QGuiApplication app(argc, argv);
+
+    QQuickView view(QUrl::fromLocalFile("MyItem.qml"));
+    QObject *item = view.rootObject();
+
+    MyClass myClass;
+    QObject::connect(item, SIGNAL(qmlSignal(QString)),
+                     &myClass, SLOT(cppSlot(QString)));
+
+    view.show();
+    return app.exec();
+}
+```
+当使用QML对象类型作为信号参数时，参数应该使用var作为类型，并且使用q变体类型，应该在C++中使用该值：
+```qml
+// MyItem.qml
+import QtQuick 2.0
+
+Item {
+    id: item
+    width: 100; height: 100
+
+    signal qmlSignal(var anObject)
+
+    MouseArea {
+        anchors.fill: parent
+        onClicked: item.qmlSignal(item)
+    }
+}
+```
+  
+```C++
+class MyClass : public QObject
+{
+    Q_OBJECT
+public slots:
+    void cppSlot(const QVariant &v) {
+       qDebug() << "Called the C++ slot with value:" << v;
+
+       QQuickItem *item =
+           qobject_cast<QQuickItem*>(v.value<QObject*>());
+       qDebug() << "Item dimensions:" << item->width()
+                << item->height();
+    }
+};
+
+int main(int argc, char *argv[]) {
+    QApplication app(argc, argv);
+
+    QQuickView view(QUrl::fromLocalFile("MyItem.qml"));
+    QObject *item = view.rootObject();
+
+    MyClass myClass;
+    QObject::connect(item, SIGNAL(qmlSignal(QVariant)),
+                     &myClass, SLOT(cppSlot(QVariant)));
+
+    view.show();
+    return app.exec();
+}
+```
